@@ -274,6 +274,18 @@ body {
   margin-bottom: 12px;
 }
 
+.timeline-count {
+  font-size: 12px;
+  color: var(--met-muted);
+  margin: 0 0 12px;
+}
+
+.pill-time {
+  margin-left: 6px;
+  color: var(--met-cyan);
+  font-family: monospace;
+}
+
 .records-strip {
   display: flex;
   gap: 10px;
@@ -419,6 +431,34 @@ body {
   font-size: 12px;
   color: var(--met-muted);
   margin-bottom: 12px;
+}
+
+.monsoon-trend-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin: 8px 0 12px;
+  border: 1px solid var(--met-border);
+}
+
+.monsoon-trend-badge.trend-回升 {
+  color: #7ae582;
+  border-color: rgba(122, 229, 130, 0.5);
+  background: rgba(122, 229, 130, 0.08);
+}
+
+.monsoon-trend-badge.trend-下行 {
+  color: var(--met-red);
+  border-color: rgba(255, 0, 84, 0.5);
+  background: rgba(255, 0, 84, 0.08);
+}
+
+.monsoon-trend-badge.trend-平稳 {
+  color: var(--met-cyan);
+  border-color: rgba(0, 240, 255, 0.4);
+  background: rgba(0, 240, 255, 0.06);
 }
 
 .monsoon-forecast-box {

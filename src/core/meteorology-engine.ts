@@ -4,8 +4,10 @@ import {
   BarometricZone,
   MonsoonTrend,
   ExtremeWeatherAlert,
-  SynopticChartData
+  SynopticChartData,
+  TrendDirection
 } from './models';
+import { canonicalizeRecords, mergeByDay } from './mood-ordering';
 
 export const TAG_METAS: Record<string, MoodTagMeta> = {
   '晴空万里': {
@@ -104,8 +106,10 @@ export function createRecordFromTag(tag: string, intensity: number, note: string
   const windDeg = dirIdx * 45;
   const windSpeed = 5 + intensity * 3.5;
 
+  const createdAt = Date.now();
   return {
-    id: `rec-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    id: `rec-${createdAt}-${Math.floor(Math.random() * 1000)}`,
+    createdAt,
     date: dateStr || new Date().toISOString().split('T')[0],
     tag,
     intensity,
@@ -120,11 +124,14 @@ export function createRecordFromTag(tag: string, intensity: number, note: string
 }
 
 export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData {
-  const sorted = [...records].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  // 唯一入口：去重 + 稳定全序排序，页面 / 统计 / 导出共享同一份快照
+  const sorted = canonicalizeRecords(records);
+  const dailyMoods = mergeByDay(sorted);
   const currentRecord = sorted[sorted.length - 1] || createRecordFromTag('阴转多云', 5, '默认天气');
 
-  const totalPressure = sorted.reduce((acc, r) => acc + r.pressureHpa, 0);
-  const avgPressure = Math.round(totalPressure / sorted.length);
+  // 所有统计以“同日合并后的日观测量”为口径，同日多条无论怎样排列结果都一致
+  const totalPressure = dailyMoods.reduce((acc, day) => acc + day.pressureHpa, 0);
+  const avgPressure = dailyMoods.length ? Math.round(totalPressure / dailyMoods.length) : currentRecord.pressureHpa;
 
   // Barometric zones analysis
   let equatorial = 0; // high intensity + low/moderate pressure
@@ -132,14 +139,14 @@ export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData
   let subPolar = 0; // low pressure sad/fog
   let polarCold = 0; // high pressure freezing/detached
 
-  sorted.forEach(r => {
-    if (r.pressureHpa >= 1020 && r.temperatureC > 15) subTropical++;
-    else if (r.pressureHpa >= 1020 && r.temperatureC <= 10) polarCold++;
-    else if (r.pressureHpa <= 995) subPolar++;
+  dailyMoods.forEach(day => {
+    if (day.pressureHpa >= 1020 && day.temperatureC > 15) subTropical++;
+    else if (day.pressureHpa >= 1020 && day.temperatureC <= 10) polarCold++;
+    else if (day.pressureHpa <= 995) subPolar++;
     else equatorial++;
   });
 
-  const total = sorted.length || 1;
+  const total = dailyMoods.length || 1;
   const zones: BarometricZone[] = [
     {
       code: 'Z-STH',
@@ -179,10 +186,19 @@ export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData
     }
   ];
 
-  // Monsoon trend analysis
-  const recentSlice = sorted.slice(-7);
-  const avgIntensity = recentSlice.reduce((s, r) => s + r.intensity, 0) / (recentSlice.length || 1);
-  const hasStorm = recentSlice.some(r => r.pressureHpa < 985);
+  // Monsoon trend analysis（近 7 个自然日，按合并后日序列确定性切片）
+  const recentDays = dailyMoods.slice(-7);
+  const hasStorm = recentDays.some(day => day.pressureHpa < 985);
+
+  // 趋势方向：近 7 日首末（合并）气压差，阈值内视为平稳
+  const TREND_THRESHOLD_HPA = 1;
+  const trendDeltaHpa = recentDays.length >= 2
+    ? recentDays[recentDays.length - 1].pressureHpa - recentDays[0].pressureHpa
+    : 0;
+  const trendDirection: TrendDirection =
+    trendDeltaHpa > TREND_THRESHOLD_HPA ? '回升'
+    : trendDeltaHpa < -TREND_THRESHOLD_HPA ? '下行'
+    : '平稳';
 
   let vectorName = '东亚温和偏南季风';
   let originSource = '来自生活日常与适度社交温和气团';
@@ -210,11 +226,13 @@ export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData
   const monsoon: MonsoonTrend = {
     vectorName,
     originSource,
-    frequencyDays: recentSlice.length,
+    frequencyDays: recentDays.length,
     flowSpeed,
     windAngle,
     weatherImpact,
-    upcomingForecast
+    upcomingForecast,
+    trendDirection,
+    trendDeltaHpa
   };
 
   // Alerts
@@ -273,16 +291,21 @@ export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData
   else if (alerts.length > 0) pressureSystemType = '锋面气旋多变';
   else pressureSystemType = '深槽低气压阴霾';
 
+  const trendText = `近 7 日气压${trendDirection === '平稳' ? '基本持平' : `较周初${trendDirection} ${Math.abs(trendDeltaHpa)} hPa`}`;
+
   return {
     chartId: `SYN-${Date.now().toString(36).toUpperCase()}`,
     generatedDate: new Date().toLocaleDateString('zh-CN'),
     currentRecord,
     records: sorted,
+    sortedRecords: sorted,
+    dailyMoods,
+    recordCount: sorted.length,
     averagePressure: avgPressure,
     zones,
     monsoon,
     alerts,
     pressureSystemType,
-    metSummary: `气象综观显示：当前心境领空受【${pressureSystemType}】统御。全周期平均气压 ${avgPressure} hPa，近期主要受【${monsoon.vectorName}】影响。${alerts.length > 0 ? `当前挂起 ${alerts.length} 个灾害性气象预警！` : '整层大气环流平稳，无破坏性对流。'}`
+    metSummary: `气象综观显示：当前心境领空受【${pressureSystemType}】统御。全周期日均气压 ${avgPressure} hPa，近期主要受【${monsoon.vectorName}】影响，${trendText}。${alerts.length > 0 ? `当前挂起 ${alerts.length} 个灾害性气象预警！` : '整层大气环流平稳，无破坏性对流。'}`
   };
 }

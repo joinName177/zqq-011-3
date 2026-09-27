@@ -1,37 +1,56 @@
 import { MoodRecord } from '../core/models';
 import { MoodRepositoryPort } from '../ports/mood-repository.port';
 import { createRecordFromTag } from '../core/meteorology-engine';
+import { canonicalizeRecords, recordCreatedAt } from '../core/mood-ordering';
 
 const STORAGE_KEY = 'mood_meteorology_records_v1';
 
 export class LocalStorageMoodAdapter implements MoodRepositoryPort {
   getAll(): MoodRecord[] {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return this.resetToSample();
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return this.normalize(parsed);
+        }
+      } catch {
+        // 损坏数据降级为示例序列
       }
-    } catch {
-      // ignore
     }
     return this.resetToSample();
   }
 
+  /**
+   * 规范化持久化数据：补齐历史记录缺失的 createdAt，并按稳定全序落盘。
+   * 同一日允许多条签到记录，刷新后顺序不会变化。
+   */
+  private normalize(parsed: unknown[]): MoodRecord[] {
+    const valid = parsed.filter((item): item is MoodRecord =>
+      !!item && typeof item === 'object'
+      && typeof (item as MoodRecord).id === 'string'
+      && typeof (item as MoodRecord).date === 'string'
+      && typeof (item as MoodRecord).tag === 'string'
+    );
+    if (valid.length === 0) return [];
+
+    const withTimestamps = valid.map(record =>
+      typeof record.createdAt === 'number' ? record : { ...record, createdAt: recordCreatedAt(record) }
+    );
+    return canonicalizeRecords(withTimestamps);
+  }
+
   add(record: MoodRecord): void {
     const records = this.getAll();
-    // remove existing for same date if any
-    const filtered = records.filter(r => r.date !== record.date);
-    filtered.push(record);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    // 同日多条并存：新记录追加后按稳定全序统一落盘（不再按日期覆盖）
+    records.push(record);
+    const canonical = canonicalizeRecords(records);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
   }
 
   delete(id: string): void {
     const records = this.getAll().filter(r => r.id !== id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(canonicalizeRecords(records)));
   }
 
   resetToSample(): MoodRecord[] {
@@ -53,13 +72,17 @@ export class LocalStorageMoodAdapter implements MoodRepositoryPort {
     ];
 
     const now = new Date();
-    const records: MoodRecord[] = sampleSequence.map(item => {
+    // 示例记录按生成顺序赋予严格递增的创建时刻，保证全序确定
+    const baseTimestamp = now.getTime();
+    const records: MoodRecord[] = sampleSequence.map((item, index) => {
       const d = new Date(now.getTime() - item.daysAgo * 86400000);
       const dateStr = d.toISOString().split('T')[0];
-      return createRecordFromTag(item.tag, item.intensity, item.note, dateStr);
+      const record = createRecordFromTag(item.tag, item.intensity, item.note, dateStr);
+      return { ...record, createdAt: baseTimestamp + index };
     });
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
-    return records;
+    const canonical = canonicalizeRecords(records);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
+    return canonical;
   }
 }

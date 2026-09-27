@@ -1,11 +1,14 @@
 import { SynopticChartData, MoodRecord } from '../core/models';
 import { TAG_METAS } from '../core/meteorology-engine';
+import { recordCreatedAt } from '../core/mood-ordering';
 
 export interface WeatherUIHandlers {
   onOpenLogModal: () => void;
   onResetData: () => void;
   onSubmitLog: (tag: string, intensity: number, note: string) => void;
   onSelectRecord: (record: MoodRecord) => void;
+  onExportJson: () => void;
+  onExportCsv: () => void;
 }
 
 export function renderWeatherApp(
@@ -120,6 +123,8 @@ export function renderWeatherApp(
         </div>
         <div class="met-header-actions">
           <button class="btn-reset" id="btnReset">🔄 重置示例气象序列</button>
+          <button class="btn-reset" id="btnExportCsv">📊 导出 CSV</button>
+          <button class="btn-reset" id="btnExportJson">🧾 导出 JSON</button>
           <button class="btn-record-mood" id="btnOpenLog">✍️ 记录今日心情天气</button>
         </div>
       </header>
@@ -188,19 +193,30 @@ export function renderWeatherApp(
           <!-- Recent Days Sequence Strip -->
           <div class="timeline-section">
             <h3>📅 近期气象观测序列 (点击切换观测标本)</h3>
+            <p class="timeline-count">
+              共 ${chartData.dailyMoods.length} 个观测日 · ${chartData.recordCount} 条原始观测记录
+              （同日多条按签到时刻稳定排序，并合并参与统计与导出）
+            </p>
             <div class="records-strip">
-              ${chartData.records
-                .map(
-                  r => `
+              ${(() => {
+                const countByDate = new Map(chartData.dailyMoods.map(day => [day.date, day.recordCount]));
+                const formatTime = (record: MoodRecord) => {
+                  const hhmm = new Date(recordCreatedAt(record)).toTimeString().slice(0, 5);
+                  return hhmm === '00:00' ? '' : hhmm;
+                };
+                return chartData.sortedRecords
+                  .map(
+                    r => `
                 <div class="record-pill ${r.id === cur.id ? 'active' : ''}" data-id="${r.id}">
-                  <div class="pill-date">${r.date.slice(5)}</div>
+                  <div class="pill-date">${r.date.slice(5)}${(countByDate.get(r.date) ?? 0) > 1 ? `<span class="pill-time">${formatTime(r)}</span>` : ''}</div>
                   <div class="pill-icon">${(TAG_METAS[r.tag] || TAG_METAS['阴转多云']).icon}</div>
                   <div class="pill-tag">${esc(r.tag)}</div>
                   <div class="pill-pressure">${r.pressureHpa} hPa</div>
                 </div>
               `
-                )
-                .join('')}
+                  )
+                  .join('');
+              })()}
             </div>
           </div>
         </main>
@@ -237,6 +253,10 @@ export function renderWeatherApp(
               <div class="monsoon-vector-title">
                 <span>🍃</span>
                 <span>${esc(chartData.monsoon.vectorName)}</span>
+              </div>
+              <div class="monsoon-trend-badge trend-${chartData.monsoon.trendDirection}">
+                近 7 日气压趋势：${chartData.monsoon.trendDirection}
+                （${chartData.monsoon.trendDeltaHpa >= 0 ? '+' : ''}${chartData.monsoon.trendDeltaHpa} hPa）
               </div>
               <div class="monsoon-meta">
                 <div>流场源动力：${esc(chartData.monsoon.originSource)}</div>
@@ -330,11 +350,13 @@ export function renderWeatherApp(
   // Attach event listeners
   container.querySelector('#btnOpenLog')?.addEventListener('click', handlers.onOpenLogModal);
   container.querySelector('#btnReset')?.addEventListener('click', handlers.onResetData);
+  container.querySelector('#btnExportJson')?.addEventListener('click', handlers.onExportJson);
+  container.querySelector('#btnExportCsv')?.addEventListener('click', handlers.onExportCsv);
 
   container.querySelectorAll('.record-pill').forEach(pill => {
     pill.addEventListener('click', () => {
       const id = pill.getAttribute('data-id');
-      const rec = chartData.records.find(r => r.id === id);
+      const rec = chartData.sortedRecords.find(r => r.id === id);
       if (rec) handlers.onSelectRecord(rec);
     });
   });
