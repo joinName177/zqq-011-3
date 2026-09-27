@@ -14,6 +14,7 @@ export interface MoodTagMeta {
 export interface MoodRecord {
   id: string;
   date: string; // YYYY-MM-DD
+  createdAt: number; // 提交时间戳（毫秒），同日稳定排序与“最后提交覆盖”的依据
   tag: string;
   intensity: number; // 1 - 10
   note: string;

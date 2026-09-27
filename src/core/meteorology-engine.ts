@@ -6,6 +6,7 @@ import {
   ExtremeWeatherAlert,
   SynopticChartData
 } from './models';
+import { canonicalizeRecords } from './record-ordering';
 
 export const TAG_METAS: Record<string, MoodTagMeta> = {
   '晴空万里': {
@@ -90,6 +91,9 @@ export const TAG_METAS: Record<string, MoodTagMeta> = {
   }
 };
 
+// 同毫秒内连续创建时仍保证 id 唯一且可按 id 字典序定先后（同日稳定排序）
+let recordSequence = 0;
+
 export function createRecordFromTag(tag: string, intensity: number, note: string, dateStr?: string): MoodRecord {
   const meta = TAG_METAS[tag] || TAG_METAS['阴转多云'];
   const pressureOffset = (5 - intensity) * 3;
@@ -104,8 +108,11 @@ export function createRecordFromTag(tag: string, intensity: number, note: string
   const windDeg = dirIdx * 45;
   const windSpeed = 5 + intensity * 3.5;
 
+  const createdAt = Date.now();
+  const seq = String(recordSequence++).padStart(4, '0');
   return {
-    id: `rec-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    id: `rec-${createdAt}-${seq}`,
+    createdAt,
     date: dateStr || new Date().toISOString().split('T')[0],
     tag,
     intensity,
@@ -119,9 +126,36 @@ export function createRecordFromTag(tag: string, intensity: number, note: string
   };
 }
 
-export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData {
-  const sorted = [...records].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  const currentRecord = sorted[sorted.length - 1] || createRecordFromTag('阴转多云', 5, '默认天气');
+export function evaluateSynopticSystem(recordsInput: MoodRecord[]): SynopticChartData {
+  // 统一入口：同日合并（每日一条，最后提交覆盖）+ 全序稳定排序
+  const sorted = canonicalizeRecords(recordsInput);
+
+  // 空数据安全状态：不产生 NaN，也不污染真实数据集
+  if (sorted.length === 0) {
+    const fallbackRecord = createRecordFromTag('阴转多云', 5, '暂无观测记录');
+    return {
+      chartId: 'SYN-EMPTY',
+      generatedDate: new Date().toLocaleDateString('zh-CN'),
+      currentRecord: fallbackRecord,
+      records: [],
+      averagePressure: 0,
+      zones: [],
+      monsoon: {
+        vectorName: '暂无观测数据',
+        originSource: '尚未建立任何心情观测记录',
+        frequencyDays: 0,
+        flowSpeed: '无数据',
+        windAngle: 0,
+        weatherImpact: '等待第一条观测记录',
+        upcomingForecast: '记录今日心情后即可生成情绪天气图。'
+      },
+      alerts: [],
+      pressureSystemType: '温带反气旋平稳',
+      metSummary: '暂无观测记录，尚无法推演情绪天气系统。'
+    };
+  }
+
+  const currentRecord = sorted[sorted.length - 1];
 
   const totalPressure = sorted.reduce((acc, r) => acc + r.pressureHpa, 0);
   const avgPressure = Math.round(totalPressure / sorted.length);
@@ -273,8 +307,18 @@ export function evaluateSynopticSystem(records: MoodRecord[]): SynopticChartData
   else if (alerts.length > 0) pressureSystemType = '锋面气旋多变';
   else pressureSystemType = '深槽低气压阴霾';
 
+  // 图号由规范化后的记录摘要决定：同一数据集刷新后图号保持一致
+  const chartDigest = sorted
+    .map(r => `${r.date}:${r.tag}:${r.intensity}:${r.pressureHpa}`)
+    .join('|');
+  let hash = 0;
+  for (let i = 0; i < chartDigest.length; i++) {
+    hash = (hash * 31 + chartDigest.charCodeAt(i)) | 0;
+  }
+  const chartId = `SYN-${(hash >>> 0).toString(36).toUpperCase().padStart(7, '0')}`;
+
   return {
-    chartId: `SYN-${Date.now().toString(36).toUpperCase()}`,
+    chartId,
     generatedDate: new Date().toLocaleDateString('zh-CN'),
     currentRecord,
     records: sorted,

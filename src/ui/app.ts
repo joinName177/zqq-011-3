@@ -6,6 +6,8 @@ export interface WeatherUIHandlers {
   onResetData: () => void;
   onSubmitLog: (tag: string, intensity: number, note: string) => void;
   onSelectRecord: (record: MoodRecord) => void;
+  onExportJson: () => void;
+  onExportCsv: () => void;
 }
 
 export function renderWeatherApp(
@@ -120,6 +122,8 @@ export function renderWeatherApp(
         </div>
         <div class="met-header-actions">
           <button class="btn-reset" id="btnReset">🔄 重置示例气象序列</button>
+          <button class="btn-reset" id="btnExportCsv">📄 导出 CSV</button>
+          <button class="btn-reset" id="btnExportJson">🧾 导出 JSON</button>
           <button class="btn-record-mood" id="btnOpenLog">✍️ 记录今日心情天气</button>
         </div>
       </header>
@@ -330,6 +334,8 @@ export function renderWeatherApp(
   // Attach event listeners
   container.querySelector('#btnOpenLog')?.addEventListener('click', handlers.onOpenLogModal);
   container.querySelector('#btnReset')?.addEventListener('click', handlers.onResetData);
+  container.querySelector('#btnExportJson')?.addEventListener('click', handlers.onExportJson);
+  container.querySelector('#btnExportCsv')?.addEventListener('click', handlers.onExportCsv);
 
   container.querySelectorAll('.record-pill').forEach(pill => {
     pill.addEventListener('click', () => {
